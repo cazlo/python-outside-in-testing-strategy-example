@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.7
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run CI tests
+        run: make ci-test
+
+      - name: Generate coverage report
+        run: make test-coverage
+
+      - name: Upload unit test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-coverage
+          path: coverage/unit-coverage.html
+          retention-days: 30
+
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run integration tests
+        run: make ci-test-integration
+
+  integration-coverage:
+    name: Integration Test with Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run integration tests with coverage
+        run: make test-integration-with-coverage
+
+      - name: Upload integration coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage-report
+          path: coverage/coverage.html
+          retention-days: 30
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build all artifacts
+        run: make ci-build
+
+  k8s-test:
+    name: Kubernetes Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster
+          wait: 30s
+
+      - name: Run Kubernetes tests
+        run: make k8s-build-and-load k8s-deploy k8s-test-ci
+
+      - name: Clean up cluster
+        if: always()
+        run: kind delete cluster --name test-cluster
+
+      - name: Debug - Show pods on failure
+        if: failure()
+        run: make k8s-debug k8s-logs

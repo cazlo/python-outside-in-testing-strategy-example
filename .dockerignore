@@ -1,0 +1,5 @@
+app/htmlcov
+app/.coverage
+app/celerybeat-schedule
+app/coverage.xml
+app/junit-test-results.xml
