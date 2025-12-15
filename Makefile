@@ -1,17 +1,3 @@
-#SHELL := /bin/bash
-#.ONESHELL:
-#.SHELLFLAGS := -eu -o pipefail -c
-#
-#ASDF_DIR ?= $(HOME)/.asdf
-#
-## Ensure asdf is initialized and shims are on PATH for all recipes
-#export PATH := $(ASDF_DIR)/bin:$(ASDF_DIR)/shims:$(PATH)
-#
-## If you want the asdf function available too (for `asdf ...` commands)
-#define ASDF_INIT
-#. "$(ASDF_DIR)/asdf.sh"
-#endef
-
 .PHONY: help
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -19,269 +5,161 @@ help: ## Show this help message
 	@echo 'Available targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-GOLANGCI_BIN := ./bin/golangci-lint
-
 ##@ Development
 
-.PHONY: deps
-deps: ## Download Go module dependencies
-	go mod download
-
-.PHONY: tidy
-tidy: ## Tidy Go module dependencies
-	go mod tidy
-
-.PHONY: build
-build: ## Build the server binary locally
-	go build -o bin/server ./cmd/server
+.PHONY: install
+install: ## Install Python dependencies using uv
+	uv sync
 
 .PHONY: run
-run: ## Run the server locally (default config)
-	go run ./cmd/server
+run: deps-up ## Run the FastAPI server locally
+	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-.PHONY: run-with-mocks
-run-with-mocks: deps-up ## Run the server locally with wiremock dependency
-	EXTERNAL_URL=http://localhost:8081/status/204 go run ./cmd/server
+.PHONY: run-debug
+run-debug: deps-up ## Run the FastAPI server in debug mode
+	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --log-level debug
 
 ##@ Testing
 
-.PHONY: test
-test: ## Run unit tests only (use test-integration for full outside-in tests)
-	go test ./internal/... -coverpkg=./internal/... -count=1 -v -cover
+# Three distinct test runtime contexts:
+# 1. test-unit: Local unit tests with coverage (uv pytest + local dependencies)
+# 2. test-integration: Full integration in Docker Compose (all services containerized, no coverage)
+# 3. test-local-integration: Dependencies in Docker, API/worker local for debugging
 
 .PHONY: test-unit
-test-unit: test ## Alias for test (unit tests only)
-
-.PHONY: test-blackbox
-test-blackbox: ## Run blackbox tests against a running server (requires BASE_URL)
-	go test ./test/blackbox -count=1 -v
-
-.PHONY: test-blackbox-local
-test-blackbox-local: ## Run blackbox tests against local server (assumes server running on :8080)
-	BASE_URL=http://localhost:8080 WIREMOCK_URL=http://localhost:8081 go test ./test/blackbox -count=1 -v
+test-unit: deps-up ## Run unit tests locally with coverage (pytest on host, deps in Docker)
+	@echo "Running unit tests with line and branch coverage..."
+	cd src && uv run pytest -v \
+	    -m "unit" \
+		--cov=app \
+		--cov-branch \
+		--cov-report=html \
+		--cov-report=term-missing \
+		--cov-report=term:skip-covered
 
 .PHONY: test-integration
-test-integration: deps-up ## Run integration tests with dependencies (server must be running separately)
-	@echo "Starting wiremock dependency..."
-	@echo "Run 'make run-with-mocks' in another terminal, then 'make test-blackbox-local'"
-	@echo "Or use 'make test-integration-with-coverage' for automated testing with coverage"
+test-integration: ## Run integration tests in Docker Compose (all services containerized, no coverage)
+	@echo "Running integration tests in Docker Compose..."
+	docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests
+	docker compose -f docker-compose.test.yml down
 
-.PHONY: test-integration-with-coverage
-test-integration-with-coverage: ## Run integration tests with coverage collection in Docker
-	@echo "Running integration tests with coverage in Docker..."
-	@mkdir -p coverage
-	@chmod 777 coverage
-	@rm -rf coverage/cov* 2>/dev/null || true
-	docker compose -f docker-compose-coverage.yml up --build --abort-on-container-exit --exit-code-from tests
-	@echo "Stopping containers..."
-	docker compose -f docker-compose-coverage.yml down
-	@echo "Converting coverage data..."
-	@if ls coverage/covcounters.* 1> /dev/null 2>&1; then \
-		go tool covdata textfmt -i=coverage -o coverage/coverage.out; \
-		go tool cover -html=coverage/coverage.out -o coverage/coverage.html; \
-		echo "Coverage report generated: coverage/coverage.html"; \
-		go tool cover -func=coverage/coverage.out | tail -n 1; \
-	else \
-		echo "Warning: No coverage counters file found. Coverage data may not have been collected."; \
-		ls -la coverage/; \
-	fi
+.PHONY: test-local-integration
+test-local-integration: deps-up wait-for-health ## Run integration tests against locally running API (for debugging)
+	@echo "Dependencies are running. Start your API/worker locally in debug mode, then run:"
+	@echo "  cd src && BASE_URL=http://localhost:8000 uv run pytest test/ -v -m integration"
+	@echo ""
+	@echo "Or use this target to run tests automatically:"
+	$(MAKE) _run-local-integration-tests
 
-.PHONY: test-coverage
-test-coverage: ## Run unit tests with coverage report
-	@mkdir -p coverage
-	go test ./internal/... -coverpkg=./internal/... -coverprofile=coverage/unit-coverage.out -count=1
-	go tool cover -html=coverage/unit-coverage.out -o coverage/unit-coverage.html
-	@echo "Unit test coverage report generated: coverage/unit-coverage.html"
+.PHONY: _run-local-integration-tests
+_run-local-integration-tests: ## Internal: Run integration tests against local API
+	@echo "Waiting for API to be healthy at http://localhost:8000..."
+	@timeout 30s sh -c 'until curl -sf http://localhost:8000/health > /dev/null; do sleep 1; done' || \
+		(echo "ERROR: API not healthy after 30s. Start the API with 'make run' in another terminal." && exit 1)
+	cd src && BASE_URL=http://localhost:8000 uv run pytest test/ -v -m integration
 
-.PHONY: test-all
-test-all: test test-integration-with-coverage ## Run all tests (unit + integration) with coverage
+.PHONY: wait-for-health
+wait-for-health: ## Wait for local dependencies to be healthy
+	@echo "Waiting for PostgreSQL..."
+	@timeout 30s sh -c 'until docker compose exec -T database pg_isready -U $${DATABASE_USER:-user} > /dev/null 2>&1; do sleep 1; done' || \
+		(echo "ERROR: PostgreSQL not ready" && exit 1)
+	@echo "Waiting for RabbitMQ..."
+	@timeout 30s sh -c 'until docker compose exec -T rabbitmq rabbitmq-diagnostics check_port_connectivity > /dev/null 2>&1; do sleep 1; done' || \
+		(echo "ERROR: RabbitMQ not ready" && exit 1)
+	@echo "✓ All dependencies healthy"
+
+.PHONY: test
+test: test-unit ## Default: Run unit tests (alias for test-unit)
+
+.PHONY: ci-test
+ci-test: fmt lint test-unit test-integration ## Run all checks and tests (CI-compatible)
 
 ##@ Docker Compose Workflows
 
 .PHONY: deps-up
-deps-up: ## Start dependency services (wiremock) in Docker Compose
-	docker compose up -d wiremock
+deps-up: ## Start dependency services (database, redis, rabbitmq) in Docker Compose
+	docker compose up -d database rabbitmq
 
 .PHONY: deps-down
 deps-down: ## Stop dependency services
 	docker compose down
 
-.PHONY: compose-up
-compose-up: ## Start all services in Docker Compose (wiremock + app)
-	docker compose up --build
+.PHONY: compose-up-dev
+compose-up-dev: ## Start all services in Docker Compose (dev profile)
+	docker compose --profile dev up --build
+
+.PHONY: compose-up-prod
+compose-up-prod: ## Start all services in Docker Compose (prod profile)
+	docker compose --profile prod up --build
 
 .PHONY: compose-down
 compose-down: ## Stop all Docker Compose services
 	docker compose down
 
-.PHONY: compose-test
-compose-test: ## Run outside-in tests in Docker Compose (full integration)
-	docker compose -f docker-compose-test.yml up --build --abort-on-container-exit --exit-code-from tests
-	docker compose -f docker-compose-test.yml down
-
 ##@ Docker Image Management
 
 .PHONY: docker-build-dev
 docker-build-dev: ## Build the dev/test Docker image
-	docker build --target devtest -t go-outside-in:dev .
+	docker build --target test -t python-outside-in:dev .
 
 .PHONY: docker-build-prod
 docker-build-prod: ## Build the production Docker image
-	docker build --target prod -t go-outside-in:prod .
+	docker build --target runtime -t python-outside-in:prod .
 
 .PHONY: docker-build-all
 docker-build-all: docker-build-dev docker-build-prod ## Build all Docker images
 
 ##@ Code Quality
 
-.PHONY: install-golangci-lint
-install-golangci-lint: ## Install golangci-lint
-	$(ASDF_INIT)
-	@echo "Installing golangci-lint..."
-	@echo $(go env GOPATH)
-	# see https://golangci-lint.run/docs/welcome/install/local/
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s v2.7.2
-
 .PHONY: fmt
-fmt: ## Format Go code
-	go fmt ./...
-
-.PHONY: vet
-vet: ## Run go vet
-	go vet ./...
-
-.PHONY: ensure-golangci-lint
-ensure-golangci-lint:
-	@if [ ! -x $(GOLANGCI_BIN) ]; then \
-		echo "golangci-lint not found, installing..."; \
-		$(MAKE) install-golangci-lint; \
-	fi
+fmt: ## Format Python code with ruff
+	uv run ruff format .
 
 .PHONY: lint
-lint: ensure-golangci-lint ## Run golangci-lint (will install if not found)
-	$(GOLANGCI_BIN) run
+lint: ## Run ruff and mypy linters
+	uv run ruff check .
+	cd src && uv run mypy app/
 
 .PHONY: lint-fix
-lint-fix: ensure-golangci-lint ## Run golangci-lint with autofix mode
-	$(GOLANGCI_BIN) run --fix
+lint-fix: ## Run ruff with autofix mode
+	uv run ruff check --fix .
+
+##@ Database Management
+
+.PHONY: db-migrate
+db-migrate: deps-up ## Run database migrations
+	cd src && uv run alembic upgrade head
+
+.PHONY: db-revision
+db-revision: ## Create a new database migration (requires MESSAGE="migration message")
+	cd src && uv run alembic revision --autogenerate -m "$(MESSAGE)"
+
+.PHONY: db-downgrade
+db-downgrade: ## Downgrade database by one revision
+	cd src && uv run alembic downgrade -1
 
 ##@ CI-Compatible Workflows
-
-.PHONY: ci-test
-ci-test: fmt vet test ## Run all checks and tests (CI-compatible)
-
-.PHONY: ci-test-integration
-ci-test-integration: compose-test ## Run integration tests in Docker (CI-compatible)
 
 .PHONY: ci-build
 ci-build: docker-build-all ## Build all artifacts (CI-compatible)
 
 .PHONY: ci-full
-ci-full: ci-test ci-test-integration ci-build ## Run complete CI pipeline locally
-
-##@ Kubernetes Workflows
-
-.PHONY: k8s-create-cluster
-k8s-create-cluster: ## Create a local kind cluster for testing
-	@echo "Creating kind cluster..."
-	@kind create cluster --name test-cluster --wait 30s || echo "Cluster may already exist"
-
-.PHONY: k8s-delete-cluster
-k8s-delete-cluster: ## Delete the local kind cluster
-	@echo "Deleting kind cluster..."
-	@kind delete cluster --name test-cluster
-
-.PHONY: k8s-build-and-load
-k8s-build-and-load: ## Build Docker image and load into kind cluster
-	@echo "Building Docker image..."
-	docker build --target prod -t go-outside-in:test .
-	@echo "Loading image into kind cluster..."
-	kind load docker-image go-outside-in:test --name test-cluster
-
-.PHONY: k8s-deploy
-k8s-deploy: ## Deploy application and dependencies to kind cluster
-	@echo "Cluster Context"
-	kubectl cluster-info
-	kubectl config current-context
-	@echo "Deploying wiremock..."
-	kubectl apply -f k8s/wiremock.yaml
-	@echo "Waiting for wiremock to be ready..."
-	kubectl wait --for=condition=ready pod -l app=wiremock --timeout=60s
-	@echo "Deploying application..."
-	kubectl apply -f k8s/app.yaml
-	@echo "Waiting for application rollout..."
-	kubectl rollout status deployment/go-outside-in --timeout=90s
-	kubectl wait --for=condition=ready pod -l app=go-outside-in --timeout=60s
-	@echo "Deployment complete!"
-
-.PHONY: k8s-test
-k8s-test: ## Run blackbox tests against kind cluster (requires port-forward in another terminal)
-	@echo "Testing against kind cluster..."
-	@echo "Make sure to run 'kubectl port-forward service/go-outside-in 8080:8080' and 'kubectl port-forward service/wiremock 8081:8080' in another terminal"
-	BASE_URL=http://localhost:8080 WIREMOCK_URL=http://localhost:8081 go test ./test/blackbox -count=1 -v
-
-.PHONY: k8s-test-ci
-k8s-test-ci: ## Run blackbox tests against kind cluster (CI-compatible with auto port-forward)
-	@echo "Starting port-forward in background..."
-	@kubectl port-forward service/go-outside-in 8080:8080 > /dev/null 2>&1 & echo $$! > .k8s-port-forward-app.pid
-	@kubectl port-forward service/wiremock 8081:8080 > /dev/null 2>&1 & echo $$! > .k8s-port-forward-wiremock.pid
-	@sleep 5
-	@echo "Running blackbox tests..."
-	@BASE_URL=http://localhost:8080 go test ./test/blackbox -count=1 -v || (kill `cat .k8s-port-forward-app.pid` 2>/dev/null; rm -f .k8s-port-forward-app.pid; exit 1)
-	@kill `cat .k8s-port-forward-app.pid` 2>/dev/null || true
-	@kill `cat .k8s-port-forward-wiremock.pid` 2>/dev/null || true
-	@rm -f .k8s-port-forward-app.pid
-	@rm -f .k8s-port-forward-wiremock.pid
-	@echo "✓ Kubernetes tests passed!"
-
-.PHONY: k8s-full-test
-k8s-full-test: k8s-create-cluster k8s-build-and-load k8s-deploy k8s-test-ci ## Full K8s test: create cluster, build, deploy, test (CI-compatible)
-
-.PHONY: k8s-test-with-cluster
-k8s-test-with-cluster: k8s-full-test ## Alias for k8s-full-test
-
-.PHONY: k8s-logs
-k8s-logs: ## Show logs from all pods
-	@echo "=== Application logs ==="
-	@kubectl logs -l app=go-outside-in --tail=50
-	@echo ""
-	@echo "=== Wiremock logs ==="
-	@kubectl logs -l app=wiremock --tail=50
-
-.PHONY: k8s-debug
-k8s-debug: ## Show debugging information for Kubernetes deployment
-	@echo "=== Pods ==="
-	@kubectl get pods
-	@echo ""
-	@echo "=== Services ==="
-	@kubectl get services
-	@echo ""
-	@echo "=== Deployments ==="
-	@kubectl get deployments
-	@echo ""
-	@echo "=== Pod descriptions ==="
-	@kubectl describe pods
+ci-full: ci-test ci-build ## Run complete CI pipeline locally
 
 ##@ Cleanup
 
 .PHONY: clean
 clean: ## Clean build artifacts and containers
-	rm -rf bin/ coverage/ coverage.out coverage.html .server.pid
+	rm -rf .pytest_cache/ htmlcov/ .coverage .mypy_cache/ .ruff_cache/
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	docker compose down -v
-	docker compose -f docker-compose-test.yml down -v
 
 .PHONY: clean-all
 clean-all: clean ## Clean everything including Docker images
-	docker rmi go-outside-in:dev go-outside-in:prod 2>/dev/null || true
+	docker rmi python-outside-in:dev python-outside-in:prod 2>/dev/null || true
 
 ##@ Common Workflows
 
 .PHONY: local-dev
-local-dev: deps-up run-with-mocks ## Start local dev environment (wiremock + local server)
-
-.PHONY: local-test
-local-test: deps-up ## Start dependencies and run blackbox tests against local server
-	@echo "Starting dependencies..."
-	@echo "In another terminal, run: make run-with-mocks"
-	@echo "Then run: make test-blackbox-local"
+local-dev: deps-up run ## Start local dev environment (dependencies + local server)
 

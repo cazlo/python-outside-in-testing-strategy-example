@@ -16,5 +16,4 @@ celery = Celery(
     include="app.api.celery_task",  # route where tasks are defined
 )
 
-celery.conf.update({"beat_dburi": str(settings.SYNC_CELERY_BEAT_DATABASE_URI)})
 celery.autodiscover_tasks()

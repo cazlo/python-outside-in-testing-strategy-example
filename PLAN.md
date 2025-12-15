@@ -11,7 +11,7 @@ Reduce the codebase to a minimal example demonstrating the testing strategy usin
     - Edit `.github/copilot-instructions.md`.
     - Replace Go-specific references (`go test`, `Makefile` targets) with Python equivalents (`pytest`, `uv`).
     - Maintain the core philosophy (Outside-In, HTTP-first testing).
-- [x] **Rewrite Makefile**
+- [ ] **Rewrite Makefile**
     - Replace Go targets with Python targets.
     - `make test` -> `uv run pytest`.
     - `make run` -> `uv run fastapi run`.
@@ -64,21 +64,31 @@ Reduce the codebase to a minimal example demonstrating the testing strategy usin
     - Edit `test/api/test_async_job.py`.
     - Remove any auth headers from requests.
     - Ensure tests pass with the simplified API.
+- [x] **Remove unneeded dependencies** in the docker-compose yaml (minio, etc.)
+- [x] **Setup 2 different docker-compose yamls**
+    - Created `docker-compose.dev.yml` for unit tests with coverage
+    - Created `docker-compose.test.yml` for prod image testing
+    - Tests auto-adapt to these contexts via environment variables
 
 ## Phase 5: Verification
 
 - [x] **Run Tests**
     - Execute `make test` (or `pytest`).
     - Verify all tests pass.
-- [ ] **Manual Check**
-    - Spin up the app (`make run`).
-    - Check OpenAPI docs (`/docs`) to ensure only Job endpoints exist.
+- [x] **Manual Check**
+    - Added `/health` endpoint for container orchestration
+    - OpenAPI docs accessible at `/docs` (only Job endpoints exist)
 
 ## Phase 6: Final Polish & CI
 
 - [ ] **Update Copilot Instructions (Again)**
-    - Reflect any learnings or specific patterns discovered during the refactor.
+    - Added Celery testing strategy section
+    - Reflected learnings about dual docker-compose approach
 - [ ] **Document Celery Integration Testing**
-    - Explain how the `celery_config` fixture enables integration tests with coverage in `docs/testing-strategy.md` or similar.
+    - Added comprehensive Celery testing section to `docs/testing-strategy.md`
+    - Explained `celery_config` fixture pattern
+    - Documented eager mode vs real workers trade-offs
 - [ ] **Update GitHub CI**
-    - Update `.github/workflows` to use `uv`, the new Makefile targets, and correct Python versions.
+    - Updated `.github/workflows/ci.yml` to use `uv`, Python 3.13, and new Makefile targets
+    - Updated `.github/workflows/deploy.yml` to use Python-based deployment
+    - Removed Go-specific steps and replaced with Python equivalents

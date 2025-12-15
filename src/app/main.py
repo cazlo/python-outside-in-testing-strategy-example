@@ -59,5 +59,13 @@ async def root():
     return {"message": "Hello World"}
 
 
+@app.get("/health")
+async def health():
+    """
+    Health check endpoint for container orchestration.
+    """
+    return {"status": "healthy"}
+
+
 # Add Routers
 app.include_router(api_router_v1, prefix=settings.API_V1_STR)

@@ -1,9 +1,8 @@
 import os
 from pydantic_core.core_schema import FieldValidationInfo
-from pydantic import PostgresDsn, EmailStr, AnyHttpUrl, field_validator
+from pydantic import PostgresDsn, AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Any
-import secrets
 from enum import Enum
 
 
@@ -13,26 +12,24 @@ class ModeEnum(str, Enum):
     testing = "testing"
 
 
-class ObjectStoreProviders(str, Enum):
-    minio = "minio"
-    s3 = "s3"
-
-
 class Settings(BaseSettings):
     MODE: ModeEnum = ModeEnum.development
     API_VERSION: str = "v1"
     API_V1_STR: str = f"/api/{API_VERSION}"
     PROJECT_NAME: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 1  # 1 hour
-    REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 100  # 100 days
+
+    RABBITMQ_USER: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_HOST: str = "rabbitmq"
+    RABBITMQ_PORT: int = 5672
+
+
     DATABASE_USER: str
     DATABASE_PASSWORD: str
     DATABASE_HOST: str
     DATABASE_PORT: int
     DATABASE_NAME: str
     DATABASE_CELERY_NAME: str = "celery_schedule_jobs"
-    REDIS_HOST: str
-    REDIS_PORT: str
     DB_POOL_SIZE: int = 83
     WEB_CONCURRENCY: int = 9
     POOL_SIZE: int = max(DB_POOL_SIZE // WEB_CONCURRENCY, 5)
@@ -72,54 +69,6 @@ class Settings(BaseSettings):
                 # )
         return v
 
-    SYNC_CELERY_BEAT_DATABASE_URI: PostgresDsn | str = ""
-
-    @field_validator("SYNC_CELERY_BEAT_DATABASE_URI", mode="after")
-    def assemble_celery_beat_db_connection(
-        cls, v: str | None, info: FieldValidationInfo
-    ) -> Any:
-        if isinstance(v, str):
-            if v == "":
-                return PostgresDsn.build(
-                    scheme="postgresql+psycopg2",
-                    username=info.data["DATABASE_USER"],
-                    password=info.data["DATABASE_PASSWORD"],
-                    host=info.data["DATABASE_HOST"],
-                    port=info.data["DATABASE_PORT"],
-                    path=info.data["DATABASE_CELERY_NAME"],
-                )
-        return v
-
-    ASYNC_CELERY_BEAT_DATABASE_URI: PostgresDsn | str = ""
-
-    @field_validator("ASYNC_CELERY_BEAT_DATABASE_URI", mode="after")
-    def assemble_async_celery_beat_db_connection(
-        cls, v: str | None, info: FieldValidationInfo
-    ) -> Any:
-        if isinstance(v, str):
-            if v == "":
-                return PostgresDsn.build(
-                    scheme="postgresql+asyncpg",
-                    username=info.data["DATABASE_USER"],
-                    password=info.data["DATABASE_PASSWORD"],
-                    host=info.data["DATABASE_HOST"],
-                    port=info.data["DATABASE_PORT"],
-                    path=info.data["DATABASE_CELERY_NAME"],
-                )
-        return v
-
-    FIRST_SUPERUSER_EMAIL: EmailStr
-    FIRST_SUPERUSER_PASSWORD: str
-
-    OBJECT_STORE_PROVIDER: ObjectStoreProviders = ObjectStoreProviders.minio
-
-    MINIO_ROOT_USER: str
-    MINIO_ROOT_PASSWORD: str
-    MINIO_URL: str
-    MINIO_BUCKET: str
-
-    SECRET_KEY: str = secrets.token_urlsafe(32)
-    ENCRYPT_KEY: str = secrets.token_urlsafe(32)
     BACKEND_CORS_ORIGINS: list[str] | list[AnyHttpUrl]
 
     @field_validator("BACKEND_CORS_ORIGINS")
@@ -131,7 +80,13 @@ class Settings(BaseSettings):
         raise ValueError(v)
 
     model_config = SettingsConfigDict(
-        case_sensitive=True, env_file=os.path.expanduser("~/.env")
+        case_sensitive=True, 
+        env_file=[
+            os.path.join(os.path.dirname(__file__), "../../../.env"),       # Default config (loaded first)
+            os.path.join(os.path.dirname(__file__), "../../../.env.test"),  # Test overrides (takes precedence)
+        ],
+        env_file_encoding='utf-8',
+        extra='ignore'  # Allow extra fields from .env that aren't defined in Settings
     )
 
 

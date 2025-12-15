@@ -119,6 +119,21 @@ When adding database interactions:
 
 ---
 
+## Celery & Async Task Testing
+
+When testing Celery tasks:
+- Real Celery workers are used in all test contexts
+- Unit tests: Worker runs locally on host (via pytest-celery)
+- Integration tests: Worker runs in Docker container
+- See `docs/testing-strategy.md` for detailed patterns
+
+This approach ensures:
+- Realistic task execution across all environments
+- Full coverage support in unit tests
+- Production parity in integration tests
+
+---
+
 ## Containerization Constraints
 
 - Production images must remain distroless or minimal (e.g. python-slim).
@@ -149,17 +164,48 @@ Avoid designs that require:
 
 **ALWAYS use the Makefile for running tests and building the project.**
 
-Do NOT run `pytest` commands directly. Instead, use the appropriate Make targets:
+Do NOT run `pytest` commands directly. Instead, use the appropriate Make targets.
 
-### Testing Commands
-- **Unit/Integration tests**: `make test`
-- **All tests**: `make test-all`
-- **CI test suite**: `make ci-test`
+### Three Test Runtime Contexts
+
+This repository defines three distinct test contexts, each optimized for different workflows:
+
+#### 1. Local Unit Tests: `make test-unit`
+- **Purpose**: Fast development feedback with comprehensive coverage
+- **Execution**: `uv run pytest` on host + dependencies in Docker
+- **Coverage**: ✅ Full line and branch coverage enabled
+- **Celery**: Local worker on host (via pytest-celery)
+- **When to use**: Primary TDD workflow, pre-commit checks, coverage analysis
+
+#### 2. Integration Tests: `make test-integration`
+- **Purpose**: Validate production Docker image and deployment topology
+- **Execution**: All services (API, worker, deps) containerized in Docker Compose
+- **Coverage**: ❌ No coverage (production image lacks test tooling)
+- **Celery**: Real workers in separate containers
+- **When to use**: CI validation, pre-release testing, Docker image validation
+
+#### 3. Local Integration Tests: `make test-local-integration`
+- **Purpose**: Debug integration tests with IDE breakpoints
+- **Execution**: Dependencies in Docker, API/worker run locally on host
+- **Coverage**: ❌ No coverage (focus is debugging)
+- **Celery**: Real worker running locally (can attach debugger)
+- **When to use**: Debugging test failures, step-through debugging of handlers
+- **Workflow**: 
+  ```bash
+  # Terminal 1: Start dependencies
+  make deps-up
+  
+  # Terminal 2: Start API with debugger attached
+  make run  # or via IDE
+  
+  # Terminal 3: Run tests
+  make test-local-integration
+  ```
 
 ### Development Commands
 - **Install dependencies**: `make install`
 - **Run locally**: `make run`
-- **Start dependencies**: `make deps-up`
+- **Start dependencies only**: `make deps-up`
 - **Stop dependencies**: `make deps-down`
 - **Database Migrations**: `make db-migrate`
 
@@ -168,15 +214,18 @@ Do NOT run `pytest` commands directly. Instead, use the appropriate Make targets
 - **Lint**: `make lint`
 - **Clean**: `make clean`
 - **Help**: `make help`
+- **CI full suite**: `make ci-test` (runs fmt, lint, test-unit, test-integration)
+
+### Why the Makefile Matters
 
 The Makefile handles:
-- Environment setup
-- Dependency orchestration
-- Coverage instrumentation
-- Process management
-- Cleanup
+- Environment setup and configuration
+- Dependency orchestration (Docker Compose lifecycle)
+- Coverage instrumentation (branch + line coverage)
+- Process management and health checks
+- Cleanup and teardown
 
-**Never bypass the Makefile** - it contains critical setup and teardown logic.
+**Never bypass the Makefile** - it contains critical setup and teardown logic that ensures tests run in the correct context.
 
 ---
 
@@ -195,12 +244,25 @@ Agents should:
 2. Validate behavior via HTTP
 3. Add unit tests only if needed for coverage or complex logic
 4. Preserve test reuse across environments
-5. **Use Makefile targets for all test execution**
+5. **Use the appropriate Make target** for the test context:
+   - Development/TDD: `make test-unit`
+   - CI/validation: `make test-integration`
+   - Debugging: `make test-local-integration`
 
 Do not introduce:
 - Environment-specific test logic
 - Hidden coupling between tests and internal implementation
 - Direct `pytest` invocations (use Makefile instead)
+
+---
+
+## Test Context Detection
+
+The test suite automatically adapts based on the `BASE_URL` environment variable:
+- **`BASE_URL` not set**: Unit test context (FastAPI TestClient, local Celery worker)
+- **`BASE_URL` set**: Integration test context (real HTTP client, containerized workers)
+
+This enables **test reuse**: the same test code runs in all three contexts without modification.
 
 ---
 
@@ -216,9 +278,16 @@ regressions in test portability, clarity, or runtime parity.
 
 ### Critical Rules
 
-1. **NEVER run `pytest` directly** - always use `make test`.
+1. **NEVER run `pytest` directly** - always use the appropriate Make target:
+   - `make test-unit` for development/coverage
+   - `make test-integration` for Docker validation
+   - `make test-local-integration` for debugging
 2. **NEVER bypass the Makefile** for building, running, or testing.
 3. Tests must validate HTTP behavior, not internal implementation.
 4. Parse JSON responses directly, don't import application types into tests.
 5. Environment variables, not code, control configuration differences.
 6. **Use real database containers** for tests, not in-memory mocks.
+7. Understand which test context you're in:
+   - Unit tests: Coverage-focused, local Celery worker
+   - Integration tests: Deployment-focused, containerized workers
+   - Local integration: Debug-focused, manual workflow with local workers

@@ -138,3 +138,182 @@ Running the full suite for every small change can be slow.
 Shared state is the enemy of reliable integration tests.
 - **Mitigation**: **Unique Namespacing**. Ensure every test generates unique identifiers (UUIDs) for its data. Avoid hardcoded IDs (e.g., `ID=1`).
 - **Mitigation**: **Robust Wait Strategies**. Instead of `time.Sleep()`, use polling mechanisms to wait for asynchronous side effects (e.g., "wait until message appears in queue").
+
+---
+
+## Celery Task Testing
+
+Testing asynchronous Celery tasks presents unique challenges:
+- Background workers run in separate processes, making coverage collection difficult
+- Async behavior can introduce timing issues and test flakiness
+- Need to validate both task logic AND integration with broker/backend
+
+### Real Workers in All Contexts
+
+This repository uses **real Celery workers** in all test contexts:
+- Unit tests: Worker runs locally on host (via pytest-celery)
+- Integration tests: Worker runs in Docker container
+- Local integration tests: Worker runs locally for debugging
+
+### Benefits
+
+- **Realistic Testing**: Validates actual message passing and task execution
+- **Production Parity**: Tests behave like production
+- **Coverage Support**: pytest-celery workers support coverage instrumentation in unit tests
+- **Debuggable**: Workers can be debugged with breakpoints in local contexts
+
+### Example Test
+
+```python
+def test_async_job(client):
+    # Submit job via HTTP API
+    response = client.post("/api/v1/async_job/submit", json={"data": "test"})
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+    
+    # Wait for task to complete
+    import time
+    time.sleep(2)
+    
+    # Check result
+    result_response = client.get(f"/api/v1/async_job/result/{job_id}")
+    assert result_response.status_code == 200
+    assert result_response.json()["status"] == "completed"
+```
+
+### Production Testing
+
+For testing the production Docker image (via `docker-compose.test.yml`):
+- Celery workers run in separate containers
+- Tests validate the full deployment topology
+- Coverage is NOT collected (production image has no test tooling)
+- Focus shifts to **behavioral validation** rather than code coverage
+
+This approach ensures:
+- Realistic task execution in all environments
+- Production parity across all test contexts
+
+---
+
+## Test Runtime Contexts
+
+This repository defines **three distinct test runtime contexts**, each optimized for different purposes:
+
+### 1. Local Unit Tests (`make test-unit`)
+
+**Purpose**: Fast feedback with comprehensive coverage during development
+
+**Characteristics**:
+- Runs on host using `uv run pytest`
+- Dependencies (PostgreSQL, RabbitMQ) run in Docker containers
+- Celery worker runs locally on host (via pytest-celery)
+- **Coverage enabled** (line and branch coverage)
+- Moderate execution speed (~seconds to minutes)
+
+**When to use**:
+- Primary development workflow
+- Pre-commit validation
+- Coverage analysis
+- TDD/refactoring cycles
+
+**Command**: `make test-unit`
+
+**Trade-offs**:
+- ✅ Full coverage metrics
+- ✅ Debuggable (local worker)
+- ✅ Realistic task execution
+- ⚠️ Doesn't validate containerized deployment
+- ⚠️ Slower than mocked/eager approaches
+
+---
+
+### 2. Integration Tests (`make test-integration`)
+
+**Purpose**: Validate production Docker image and deployment topology
+
+**Characteristics**:
+- All services run in Docker Compose
+- API server, Celery worker, and dependencies all containerized
+- Tests run inside a test container
+- **No coverage** (production image has no test tooling)
+- Validates actual production artifacts
+- Slower execution (~30-60 seconds including build)
+
+**When to use**:
+- CI pipeline validation
+- Pre-release testing
+- Validating Docker image changes
+- Testing deployment configurations
+
+**Command**: `make test-integration`
+
+**Trade-offs**:
+- ✅ Validates production-like environment
+- ✅ Tests actual Docker images
+- ✅ Catches deployment/configuration issues
+- ⚠️ Slower (requires image builds)
+- ⚠️ No coverage metrics
+- ⚠️ Harder to debug (everything containerized)
+
+---
+
+### 3. Local Integration Tests (`make test-local-integration`)
+
+**Purpose**: Debug integration tests with IDE breakpoints and step-through debugging
+
+**Characteristics**:
+- Dependencies run in Docker containers
+- API server and Celery worker run **locally on host**
+- Tests run on host with `BASE_URL=http://localhost:8000`
+- Developer manually starts API/worker in debug mode
+- **No coverage** (focus is on debugging, not metrics)
+
+**When to use**:
+- Debugging failing integration tests
+- Step-through debugging of API handlers
+- Investigating timing/async issues
+- Understanding complex request flows
+
+**Command**: 
+```bash
+# Terminal 1: Start dependencies
+make deps-up
+
+# Terminal 2: Start API in debug mode (with IDE debugger attached)
+make run  # or run via IDE debugger
+
+# Terminal 3: Run integration tests
+make test-local-integration
+```
+
+**Trade-offs**:
+- ✅ Full IDE debugging support
+- ✅ Set breakpoints in API/worker code
+- ✅ Fast iteration (no container rebuilds)
+- ⚠️ Manual workflow (multiple terminals)
+- ⚠️ Requires local Python environment
+- ⚠️ Doesn't validate containerized deployment
+
+---
+
+### Choosing the Right Context
+
+| Need | Use |
+|------|-----|
+| Fast TDD cycle | `make test-unit` |
+| Coverage reports | `make test-unit` |
+| Debug test failure | `make test-local-integration` |
+| Pre-commit check | `make test-unit` |
+| CI validation | `make test-integration` |
+| Validate Docker image | `make test-integration` |
+| Step through API handler | `make test-local-integration` |
+
+### Context Switching via Environment Variables
+
+The test suite automatically adapts based on `BASE_URL`:
+- **`BASE_URL` not set**: Unit test context (TestClient, local Celery worker)
+- **`BASE_URL` set**: Integration test context (real HTTP client, containerized workers)
+
+This design enables **test reuse**: the same test code works in all three contexts.
+
+---
