@@ -25,7 +25,8 @@ async def test_create_item_triggers_background_task(client: AsyncClient):
     This mocks the Celery task to verify integration without needing RabbitMQ.
     """
     with patch("app.main.process_item") as mock_task:
-        mock_task.delay = MagicMock()
+        mock_delay = MagicMock()
+        mock_task.delay = mock_delay
 
         response = await client.post("/items", json={"name": "Test Item"})
 
@@ -36,7 +37,7 @@ async def test_create_item_triggers_background_task(client: AsyncClient):
         assert "id" in data
 
         # Verify the background task was triggered
-        mock_task.delay.assert_called_once_with(data["id"])
+        mock_delay.assert_called_once_with(data["id"])
 
 
 @pytest.mark.asyncio
