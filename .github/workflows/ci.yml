@@ -13,15 +13,24 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v6
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          go-version: '1.24'
+          version: "latest"
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          version: v2.7
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run ruff linter
+        run: uv run ruff check .
+
+      - name: Run mypy type checker
+        run: cd src && uv run mypy app/
 
   test:
     name: Test
@@ -29,65 +38,44 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          go-version: '1.24'
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: uv sync
 
       - name: Run CI tests
         run: make ci-test
 
-      - name: Generate coverage report
-        run: make test-coverage
-
-      - name: Upload unit test coverage
+      - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-coverage
-          path: coverage/unit-coverage.html
+          name: coverage-report
+          path: src/htmlcov/
           retention-days: 30
 
   integration:
-    name: Integration Test
+    name: Integration Test with Docker
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Run integration tests
-        run: make ci-test-integration
-
-  integration-coverage:
-    name: Integration Test with Coverage
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Run integration tests with coverage
-        run: make test-integration-with-coverage
-
-      - name: Upload integration coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: integration-coverage-report
-          path: coverage/coverage.html
-          retention-days: 30
+      - name: Run integration tests in Docker
+        run: make compose-test
 
   build:
     name: Build
@@ -95,40 +83,10 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build all artifacts
+      - name: Build all Docker images
         run: make ci-build
-
-  k8s-test:
-    name: Kubernetes Test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Create kind cluster
-        uses: helm/kind-action@v1
-        with:
-          cluster_name: test-cluster
-          wait: 30s
-
-      - name: Run Kubernetes tests
-        run: make k8s-build-and-load k8s-deploy k8s-test-ci
-
-      - name: Clean up cluster
-        if: always()
-        run: kind delete cluster --name test-cluster
-
-      - name: Debug - Show pods on failure
-        if: failure()
-        run: make k8s-debug k8s-logs
