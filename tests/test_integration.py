@@ -4,8 +4,7 @@ Integration tests following the Diamond Testing Strategy.
 These tests verify the entire flow from API request through database to Celery tasks.
 They are "integration-biased" meaning they test multiple components working together.
 """
-import asyncio
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -27,15 +26,15 @@ async def test_create_item_triggers_background_task(client: AsyncClient):
     """
     with patch("app.main.process_item") as mock_task:
         mock_task.delay = MagicMock()
-        
+
         response = await client.post("/items", json={"name": "Test Item"})
-        
+
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "Test Item"
         assert data["status"] == "pending"
         assert "id" in data
-        
+
         # Verify the background task was triggered
         mock_task.delay.assert_called_once_with(data["id"])
 
@@ -47,7 +46,7 @@ async def test_get_item(client: AsyncClient):
     create_response = await client.post("/items", json={"name": "Get Test Item"})
     assert create_response.status_code == 201
     item_id = create_response.json()["id"]
-    
+
     # Then retrieve it
     response = await client.get(f"/items/{item_id}")
     assert response.status_code == 200
@@ -72,7 +71,7 @@ async def test_list_items(client: AsyncClient):
     await client.post("/items", json={"name": "Item 1"})
     await client.post("/items", json={"name": "Item 2"})
     await client.post("/items", json={"name": "Item 3"})
-    
+
     # List all items
     response = await client.get("/items")
     assert response.status_code == 200
@@ -92,18 +91,19 @@ async def test_full_workflow_with_task_processing(client: AsyncClient):
     create_response = await client.post("/items", json={"name": "Workflow Item"})
     assert create_response.status_code == 201
     item_id = create_response.json()["id"]
-    
+
     # Verify initial state
     get_response = await client.get(f"/items/{item_id}")
     assert get_response.json()["status"] == "pending"
-    
+
     # Simulate task processing (in a real integration test with docker-compose,
     # this would happen automatically via Celery worker)
     from app.tasks import process_item
+
     result = process_item(item_id)
-    
+
     assert result["status"] == "processed"
-    
+
     # Verify updated state
     final_response = await client.get(f"/items/{item_id}")
     assert final_response.json()["status"] == "processed"

@@ -39,10 +39,10 @@ async def create_item(item: ItemCreate, db: AsyncSession = Depends(get_db)):
     db.add(new_item)
     await db.commit()
     await db.refresh(new_item)
-    
+
     # Trigger async task to process the item
     process_item.delay(new_item.id)
-    
+
     return new_item
 
 
@@ -53,10 +53,10 @@ async def get_item(item_id: int, db: AsyncSession = Depends(get_db)):
     """
     result = await db.execute(select(Item).where(Item.id == item_id))
     item = result.scalar_one_or_none()
-    
+
     if not item:
         raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-    
+
     return item
 
 

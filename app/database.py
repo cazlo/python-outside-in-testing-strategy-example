@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import AsyncGenerator
 
 from sqlalchemy import DateTime, String, create_engine
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app.config import settings
@@ -14,7 +14,7 @@ class Base(DeclarativeBase):
 
 class Item(Base):
     __tablename__ = "items"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
@@ -26,9 +26,7 @@ class Item(Base):
 
 # Async engine for FastAPI
 async_engine = create_async_engine(settings.database_url, echo=True)
-AsyncSessionLocal = async_sessionmaker(
-    async_engine, class_=AsyncSession, expire_on_commit=False
-)
+AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
 
 # Sync engine for Celery

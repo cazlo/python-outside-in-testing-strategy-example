@@ -5,8 +5,6 @@ These are more focused tests that verify individual task behavior.
 """
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.tasks import process_item
 
 
@@ -18,17 +16,17 @@ def test_process_item_success():
     mock_item.id = 1
     mock_item.name = "Test Item"
     mock_item.status = "pending"
-    
+
     # Setup the query chain
     mock_query = MagicMock()
     mock_filter = MagicMock()
     mock_query.filter.return_value = mock_filter
     mock_filter.first.return_value = mock_item
     mock_session.query.return_value = mock_query
-    
+
     with patch("app.tasks.SessionLocal", return_value=mock_session):
         result = process_item(1)
-        
+
         # Verify the item status was updated
         assert mock_item.status == "processed"
         # Verify commit was called
@@ -41,17 +39,17 @@ def test_process_item_success():
 def test_process_item_not_found():
     """Test that process_item handles missing items gracefully."""
     mock_session = MagicMock()
-    
+
     # Setup the query chain to return None
     mock_query = MagicMock()
     mock_filter = MagicMock()
     mock_query.filter.return_value = mock_filter
     mock_filter.first.return_value = None
     mock_session.query.return_value = mock_query
-    
+
     with patch("app.tasks.SessionLocal", return_value=mock_session):
         result = process_item(999)
-        
+
         # Verify error message
         assert "error" in result
         assert "not found" in result["error"].lower()
