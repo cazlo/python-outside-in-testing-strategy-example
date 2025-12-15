@@ -40,13 +40,8 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.black]
-line-length = 88
-target-version = [ "py310", "py311", "py312" ]
-exclude = "((.eggs | .git | .pytest_cache | build | dist))"
-
 [tool.ruff]
-line-length = 88
+line-length = 100
 exclude = [".git", "__pycache__", ".mypy_cache", ".pytest_cache"]
 select = [
     "E",  # pycodestyle errors
@@ -59,7 +54,6 @@ select = [
 ignore = [
     "B904",
     "B006",    
-    "E501",  # line too long, handled by black
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
 ]
