@@ -1,0 +1,25 @@
+[project]
+name = "python-outside-in-testing-example"
+version = "0.1.0"
+description = "An example of diamond testing strategy with Python, FastAPI, Celery, and Postgres"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = []
