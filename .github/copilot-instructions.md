@@ -1,7 +1,6 @@
 # Copilot / Agent Instructions
 
-This repository demonstrates an **outside-in testing strategy** for Go
-services.
+This repository demonstrates an **outside-in testing strategy** for Python (FastAPI) services.
 
 Agentic AI operating in this repository must respect the architectural and
 testing constraints described below.
@@ -10,9 +9,9 @@ testing constraints described below.
 
 ## ⚠️ CRITICAL: Always Use the Makefile
 
-**DO NOT run `go test`, `go build`, or `go run` commands directly.**
+**DO NOT run `pytest`, `uvicorn`, or `python` commands directly.**
 
-**ALWAYS use Makefile targets** (e.g., `make test`, `make build`, `make run-with-mocks`).
+**ALWAYS use Makefile targets** (e.g., `make test`, `make run`, `make deps-up`).
 
 The Makefile handles environment setup, dependency orchestration, coverage
 instrumentation, and process lifecycle management. Bypassing it will cause
@@ -25,7 +24,7 @@ See the "Makefile Usage" section below for available targets.
 ## Core Architectural Intent
 
 - The primary interface is HTTP
-- External dependencies are accessed via HTTP
+- External dependencies are accessed via HTTP or standard protocols (DB, Redis)
 - Tests prioritize validating behavior at the interface boundary
 - Internal implementation details are considered volatile
 
@@ -99,21 +98,21 @@ This is intentional to catch:
 
 ## Service Design Constraints
 
-- Prefer standard library packages
-- Avoid introducing frameworks unless explicitly justified
-- Keep handlers thin
-- Push complexity into testable components
+- Prefer **FastAPI**, **Pydantic**, and **SQLModel** for the core stack.
+- Avoid introducing heavy frameworks unless explicitly justified.
+- Keep handlers thin.
+- Push complexity into testable components.
 
 External calls:
-- Must be configurable via environment variables
-- Must be replaceable with mock endpoints (e.g. Wiremock)
+- Must be configurable via environment variables.
+- Must be replaceable with mock endpoints (e.g. Wiremock) or real containerized services.
 
 ---
 
 ## Database Strategy
 
 When adding database interactions:
-- **Do NOT use in-memory mocks** (like sqlite or go-sqlmock) for outside-in tests.
+- **Do NOT use in-memory mocks** (like sqlite) for outside-in tests.
 - **Use real database containers** (e.g., Postgres in Docker) managed via `make deps-up`.
 - Tests must manage their own state (e.g., unique IDs or cleanup) to allow parallel execution where possible.
 - Configuration must be via `DATABASE_URL` env vars.
@@ -122,9 +121,9 @@ When adding database interactions:
 
 ## Containerization Constraints
 
-- Production images must remain distroless
-- No test tooling in production images
-- Debugging support belongs in dev/test images only
+- Production images must remain distroless or minimal (e.g. python-slim).
+- No test tooling in production images.
+- Debugging support belongs in dev/test images only.
 
 Do not:
 - Add shell utilities to prod images
@@ -150,28 +149,23 @@ Avoid designs that require:
 
 **ALWAYS use the Makefile for running tests and building the project.**
 
-Do NOT run `go test` commands directly. Instead, use the appropriate Make targets:
+Do NOT run `pytest` commands directly. Instead, use the appropriate Make targets:
 
 ### Testing Commands
-- **Unit tests**: `make test` or `make test-unit`
-- **Blackbox tests (local)**: `make test-blackbox-local`
-- **Integration tests with coverage**: `make test-integration-with-coverage`
+- **Unit/Integration tests**: `make test`
 - **All tests**: `make test-all`
 - **CI test suite**: `make ci-test`
-- **Docker Compose tests**: `make compose-test`
-- **Kubernetes tests**: `make k8s-full-test`
 
 ### Development Commands
-- **Build**: `make build`
+- **Install dependencies**: `make install`
 - **Run locally**: `make run`
-- **Run with mocks**: `make run-with-mocks`
 - **Start dependencies**: `make deps-up`
 - **Stop dependencies**: `make deps-down`
+- **Database Migrations**: `make db-migrate`
 
 ### Other Useful Targets
 - **Format code**: `make fmt`
 - **Lint**: `make lint`
-- **Lint autofix**: `make lint-fix`
 - **Clean**: `make clean`
 - **Help**: `make help`
 
@@ -188,10 +182,9 @@ The Makefile handles:
 
 ## Linting Expectations
 
-- Run `make lint` before sharing code and `make lint-fix` whenever `golangci-lint` can correct style issues automatically.
-- Linting is strict about `errcheck`: always inspect or propagate errors. If dismissal is intentional, log the failure explicitly to satisfy the rule.
-- Avoid "blank" helper functions that swallow errors; even housekeeping work (like closing resources) must log failures so issues surface during debugging.
-- Prefer small helper functions for repeated cleanup logic instead of anonymous defers that hide unchecked errors.
+- Run `make lint` before sharing code.
+- We use `ruff` for linting and formatting, and `mypy` for type checking.
+- Fix all linting errors before committing.
 
 ---
 
@@ -207,7 +200,7 @@ Agents should:
 Do not introduce:
 - Environment-specific test logic
 - Hidden coupling between tests and internal implementation
-- Direct `go test` invocations (use Makefile instead)
+- Direct `pytest` invocations (use Makefile instead)
 
 ---
 
@@ -223,10 +216,9 @@ regressions in test portability, clarity, or runtime parity.
 
 ### Critical Rules
 
-1. **NEVER run `go test` directly** - always use `make test`, `make test-blackbox-local`, etc.
-2. **NEVER bypass the Makefile** for building, running, or testing
-3. Tests must validate HTTP behavior, not internal implementation
-4. Parse JSON responses directly, don't import application types into tests
-5. Environment variables, not code, control configuration differences
-6. **Use real database containers** for tests, not in-memory mocks
-
+1. **NEVER run `pytest` directly** - always use `make test`.
+2. **NEVER bypass the Makefile** for building, running, or testing.
+3. Tests must validate HTTP behavior, not internal implementation.
+4. Parse JSON responses directly, don't import application types into tests.
+5. Environment variables, not code, control configuration differences.
+6. **Use real database containers** for tests, not in-memory mocks.
