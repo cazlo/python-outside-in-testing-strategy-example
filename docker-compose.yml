@@ -1,0 +1,174 @@
+services:
+  fastapi_server_tmpl:
+    image: python-outside-in:latest
+    restart: always
+    ports:
+      - 8000:8000
+    env_file: ".env"
+    profiles:
+      - template
+    depends_on:
+      database:
+        condition: service_healthy
+      db_migrator:
+        condition: service_completed_successfully
+    networks:
+      - app
+
+  fastapi_server_prd:
+    extends:
+      service: fastapi_server_tmpl
+    container_name: fastapi_server
+    profiles:
+      - prod
+    build:
+      context: .
+      target: runtime
+    command: "sh -c 'cd src && python app/initial_data.py && gunicorn -w 3 -k uvicorn.workers.UvicornWorker app.main:app  --bind 0.0.0.0:8000 --preload --log-level=debug --timeout 120'"
+    networks:
+      app:
+        aliases:
+          - fastapi_server
+
+  fastapi_server:
+    extends:
+      service: fastapi_server_tmpl
+    container_name: fastapi_server_dev
+    profiles:
+      - dev
+    image: python-outside-in-test:latest
+    build:
+      context: .
+      target: test
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    volumes:
+      - ./src:/opt/app/src:rw
+      - ./reports:/opt/app/reports:rw
+    environment:
+      MODE: testing
+    command: "sh -c 'cd src && uvicorn app.main:app --reload --workers 1 --host 0.0.0.0 --port 8000'"
+    networks:
+      app:
+        aliases:
+          - fastapi_server
+
+  db_migrator:
+    container_name: db_migrator
+    image: python-outside-in:latest
+    build:
+      context: .
+      target: runtime
+    profiles:
+      - dev
+      - prod
+    env_file: ".env"
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    depends_on:
+      database:
+        condition: service_healthy
+    command: "sh -c 'cd src && alembic upgrade head'"
+    networks:
+      - app
+
+  database:
+     image: docker.io/postgres:17
+     restart: always
+     container_name: database
+     env_file: ".env"
+     user: root
+     profiles:
+       - dev
+       - prod
+     volumes:
+       - db_docker:/var/lib/postgresql/data
+       - ./create-dbs.sql:/docker-entrypoint-initdb.d/create-dbs.sql
+     ports:
+       - 5454:5432
+     expose:
+       - 5432
+     environment:
+       - POSTGRES_USERNAME=${DATABASE_USER}
+       - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+       - POSTGRES_DATABASE=${DATABASE_NAME}
+     healthcheck:
+       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+       interval: 2s
+       timeout: 5s
+       retries: 10
+       start_period: 10s
+     networks:
+       - app
+  
+  rabbitmq:
+    image: docker.io/rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: always
+    profiles:
+      - dev
+      - prod
+    expose:
+      - 5672
+      - 15672
+    ports:
+      - "5672:5672"  # AMQP port for local unit tests
+      - "15672:15672"  # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-guest}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app
+
+  celery_worker:
+    container_name: celery_worker
+    restart: always
+    profiles:
+      - prod
+    image: python-outside-in:latest
+    build:
+      context: .
+      target: runtime
+    command: "sh -c 'cd src && watchfiles \"celery -A app.core.celery worker -l info -E\"'"
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file: .env
+    networks:
+      - app
+  
+  celery_beat:
+    container_name: celery_beat
+    restart: always
+    image: python-outside-in:latest
+    build:
+      context: .
+      target: runtime
+    command: "sh -c 'cd src && celery -A app.core.celery beat -l info'"
+    profiles:
+      - prod
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    env_file: .env
+    networks:
+      - app
+
+volumes:
+  db_docker:
+  rabbitmq_data:
+
+networks:
+  app:

@@ -1,0 +1,79 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production Docker image
+        run: |
+          echo "Building production image..."
+          docker build --target runtime -t python-outside-in:${{ github.sha }} -t python-outside-in:latest .
+          echo "✓ Image built: python-outside-in:${{ github.sha }}"
+
+      - name: Simulate image push to registry
+        run: |
+          echo "Would execute: docker tag python-outside-in:${{ github.sha }} <registry>/python-outside-in:${{ github.sha }}"
+          echo "Would execute: docker tag python-outside-in:${{ github.sha }} <registry>/python-outside-in:latest"
+          echo "Would execute: docker push <registry>/python-outside-in:${{ github.sha }}"
+          echo "Would execute: docker push <registry>/python-outside-in:latest"
+          echo "✓ Image would be pushed to registry"
+
+      - name: Simulate kubectl apply
+        run: |
+          echo "Would execute: kubectl set image deployment/python-outside-in server=<registry>/python-outside-in:${{ github.sha }} -n production"
+          echo "Or: kubectl apply -f k8s/app.yaml with image tag updated to ${{ github.sha }}"
+          echo "✓ Deployment manifest would be applied"
+
+      - name: Simulate rollout wait
+        run: |
+          echo "Would execute: kubectl rollout status deployment/python-outside-in -n production --timeout=5m"
+          echo "Simulating rollout..."
+          sleep 3
+          echo "Waiting for new pods to be ready..."
+          sleep 3
+          echo "Old pods being terminated..."
+          sleep 2
+          echo "✓ Rollout complete - new version deployed"
+
+      - name: Simulate health check
+        run: |
+          echo "Would execute: kubectl wait --for=condition=ready pod -l app=python-outside-in -n production --timeout=60s"
+          echo "Checking pod health..."
+          sleep 2
+          echo "✓ All pods healthy"
+
+      - name: Run integration tests in Docker
+        run: make compose-test
+
+      - name: Deployment successful
+        run: |
+          echo "================================================"
+          echo "✓ Deployment successful!"
+          echo "✓ Version: ${{ github.sha }}"
+          echo "✓ Integration tests passed"
+          echo "================================================"
+
+      - name: Debug - Show deployment info on failure
+        if: failure()
+        run: |
+          echo "Deployment failed! Gathering debug information..."
+          docker compose -f docker-compose.test.yml logs
+          echo "================================================"
+          echo "In a real deployment, you would:"
+          echo "  1. Roll back: kubectl rollout undo deployment/python-outside-in -n production"
+          echo "  2. Alert on-call team"
+          echo "  3. Create incident report"
+          echo "================================================"
+

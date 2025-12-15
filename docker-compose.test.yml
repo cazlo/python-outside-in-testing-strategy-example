@@ -1,0 +1,158 @@
+# docker-compose.test.yml
+# For testing the production image with outside-in tests
+# Run with: docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+
+services:
+  database:
+    image: docker.io/postgres:17
+    restart: always
+    container_name: database_test
+    env_file: ".env"
+    user: root
+    volumes:
+      - db_test_data:/var/lib/postgresql/data
+      # - ./create-dbs.sql:/docker-entrypoint-initdb.d/create-dbs.sql
+    expose:
+      - 5432
+    environment:
+      - POSTGRES_USERNAME=${DATABASE_USER}
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+      - POSTGRES_DATABASE=${DATABASE_NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - app
+  
+  rabbitmq:
+    image: docker.io/rabbitmq:3.13-management
+    # container_name: rabbitmq_test
+    restart: always
+    expose:
+      - 5672
+      - 15672
+    ports:
+      - "15672:15672"  # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-guest}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - rabbitmq_test_data:/var/lib/rabbitmq
+    networks:
+      - app
+
+  # db_migrator:
+  #   container_name: db_migrator_test
+  #   image: python-outside-in:latest
+  #   build:
+  #     context: .
+  #     target: runtime
+  #   env_file: ".env"
+  #   environment:
+  #     DATABASE_HOST: database
+  #   depends_on:
+  #     database:
+  #       condition: service_healthy
+  #   command: "sh -c 'cd src && alembic upgrade head'"
+  #   networks:
+  #     - app
+
+  # Production FastAPI server
+  fastapi_server:
+    container_name: fastapi_server_test
+    image: python-outside-in:latest
+    build:
+      context: .
+      target: runtime
+    restart: always
+    expose:
+      - 8000
+    ports:
+      - "8000:8000"
+    env_file: ".env"
+    environment:
+      DATABASE_HOST: database
+      RABBITMQ_HOST: rabbitmq
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672//
+      # CELERY_RESULT_BACKEND: redis://redis_server:6379/0
+    depends_on:
+      database:
+        condition: service_healthy
+      # db_migrator:
+        # condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/health'); sys.exit(0 if r.getcode()==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - app
+
+  celery_worker:
+    container_name: celery_worker_test
+    image: python-outside-in:latest
+    build:
+      context: .
+      target: runtime
+    restart: always
+    env_file: ".env"
+    environment:
+      DATABASE_HOST: database
+      RABBITMQ_HOST: rabbitmq
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672//
+      # CELERY_RESULT_BACKEND: redis://redis_server:6379/0 todo should be postgres
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: "celery -A app.core.celery worker -l info -E"
+    networks:
+      - app
+
+  # Test container that runs outside-in tests against the production server
+  tests:
+    container_name: tests
+    image: python-outside-in-test:latest
+    build:
+      context: .
+      target: test
+    volumes:
+      - ./src:/opt/app/src:ro
+      - ./test-results:/opt/app/test-results:rw
+    environment:
+      BASE_URL: http://fastapi_server:8000
+      DATABASE_HOST: database
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672//
+      # CELERY_RESULT_BACKEND: redis://redis_server:6379/0
+    env_file: .env
+    depends_on:
+      fastapi_server:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+    command: >
+      sh -c "cd src && 
+             pytest test/ -v -m integration --tb=short &&
+             echo 'All integration tests passed!'"
+    networks:
+      - app
+
+volumes:
+  db_test_data:
+  rabbitmq_test_data:
+
+networks:
+  app:
