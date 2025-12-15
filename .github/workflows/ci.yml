@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install ruff
+
+      - name: Lint with ruff
+        run: |
+          ruff check app/ tests/
+
+      - name: Check formatting
+        run: |
+          ruff format --check app/ tests/
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: |
+          pytest tests/test_tasks.py -v --tb=short
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Start services
+        run: |
+          docker compose up -d postgres rabbitmq redis
+
+      - name: Wait for services
+        run: |
+          sleep 15
+
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/testdb
+          DATABASE_URL_SYNC: postgresql://user:password@localhost:5432/testdb
+          CELERY_BROKER_URL: amqp://guest:guest@localhost:5672//
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+        run: |
+          pytest tests/test_integration.py -v --tb=short --cov=app --cov-report=xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+      - name: Stop services
+        if: always()
+        run: |
+          docker compose down -v
